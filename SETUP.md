@@ -117,3 +117,50 @@ The API itself lives at `POST http://127.0.0.1:8000/api/download`.
   upgrade it independently later with `pip install -U yt-dlp` — YouTube and
   Instagram frequently change their internals, and newer yt-dlp releases fix
   extraction breakage quickly.
+
+---
+
+## Fixing "Sign in to confirm you're not a bot" errors
+
+YouTube periodically bot-checks requests that don't look like a real signed-in
+browser session — this can happen on any IP, cloud-hosted or local, and shows
+up as a 422/503 error from `/api/download`. The reliable fix is supplying
+cookies from your own logged-in YouTube session so yt-dlp authenticates like
+a real user.
+
+### 1. Export cookies.txt from Chrome/Edge
+
+1. Install the **"Get cookies.txt LOCALLY"** extension from the Chrome Web
+   Store (works in Edge too) — search for it by that exact name. Avoid
+   extensions that upload your cookies anywhere; this one exports locally
+   only.
+2. Log into **youtube.com** in that browser if you aren't already.
+3. Click the extension icon while on a youtube.com tab → **Export** → save
+   the file as `cookies.txt`.
+
+### 2. Use it locally
+
+Place the exported file at:
+
+```
+backend/cookies.txt
+```
+
+(This path is already git-ignored — it will never be committed.) The backend
+picks it up automatically on the next request; no restart needed.
+
+### 3. Use it on Render
+
+Cookies expire and shouldn't be committed to your repo, so upload them as a
+**Secret File**:
+
+1. Render dashboard → your service → **Environment** tab → **Secret Files**.
+2. Add a new secret file with path `/etc/secrets/cookies.txt` and paste the
+   contents of your exported `cookies.txt`.
+3. Add an environment variable `COOKIES_FILE_PATH` = `/etc/secrets/cookies.txt`.
+4. Redeploy (or it picks it up on the next request if the service is already
+   running with that env var set).
+
+**Cookies expire** — typically after a few weeks to a couple months depending
+on your Google account activity. If bot-check errors come back, just repeat
+the export and re-upload the secret file.

@@ -16,6 +16,7 @@ Run with:  uvicorn main:app --reload
 """
 
 import logging
+import os
 import re
 import uuid
 from pathlib import Path
@@ -48,6 +49,14 @@ URL_PATTERNS = {
 }
 
 MAX_DURATION_SECONDS = 60 * 60  # 1 hour safety cap
+
+# Optional: path to a Netscape-format cookies.txt (exported from a browser
+# logged into YouTube/Instagram). Cloud/datacenter IPs are often bot-checked
+# by YouTube; supplying cookies from a real signed-in session is the most
+# reliable fix. Set COOKIES_FILE_PATH as an env var pointing at an uploaded
+# secret file (e.g. on Render: Settings -> Secret Files), or drop a
+# cookies.txt next to this script for local testing.
+COOKIES_FILE = Path(os.environ.get("COOKIES_FILE_PATH", str(BASE_DIR / "cookies.txt")))
 
 
 # --------------------------------------------------------------------------
@@ -121,6 +130,18 @@ def run_download(platform: str, url: str, job_id: str) -> Path:
         # FFmpeg must be on PATH for merging separate audio/video streams.
     }
 
+    if platform == "youtube":
+        # Cloud/datacenter IPs are frequently bot-checked by YouTube's web
+        # client. The android/ios player clients use a different auth path
+        # that often succeeds without cookies. See COOKIES_FILE fallback
+        # below for cases even this doesn't clear.
+        ydl_opts["extractor_args"] = {
+            "youtube": {"player_client": ["android", "ios", "web"]}
+        }
+
+    if COOKIES_FILE and COOKIES_FILE.exists():
+        ydl_opts["cookiefile"] = str(COOKIES_FILE)
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -159,6 +180,12 @@ def run_download(platform: str, url: str, job_id: str) -> Path:
 
     except yt_dlp.utils.DownloadError as exc:
         message = str(exc).lower()
+        if "sign in to confirm" in message or "not a bot" in message:
+            logger.error("yt-dlp bot-check triggered: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail="YouTube is temporarily blocking this server's requests. Please try again shortly.",
+            )
         if "unsupported url" in message or "unable to extract" in message:
             raise HTTPException(status_code=400, detail="This link isn't supported or the URL is invalid.")
         if "private" in message:

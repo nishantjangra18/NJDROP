@@ -1,6 +1,7 @@
 backend/venv/
 backend/downloads/*
 !backend/downloads/.gitkeep
+backend/cookies.txt
 __pycache__/
 *.pyc
 .git/
