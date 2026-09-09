@@ -270,4 +270,13 @@ const API_ENDPOINT = '/api/download';
   }
 
   document.addEventListener('DOMContentLoaded', init);
+
+  // ---- PWA: register service worker for the app shell ----
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch((err) => {
+        console.warn('Service worker registration failed:', err);
+      });
+    });
+  }
 })();

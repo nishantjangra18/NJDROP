@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="nGrad" x1="10" y1="20" x2="55" y2="70" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#EAF6FF"/>
+      <stop offset="0.4" stop-color="#4FC3FF"/>
+      <stop offset="1" stop-color="#2447C9"/>
+    </linearGradient>
+    <linearGradient id="jGrad" x1="45" y1="18" x2="88" y2="78" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E9D8FF"/>
+      <stop offset="0.5" stop-color="#B366FF"/>
+      <stop offset="1" stop-color="#8A2FE0"/>
+    </linearGradient>
+    <linearGradient id="arrowGrad" x1="72" y1="38" x2="88" y2="72" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFB3EE"/>
+      <stop offset="1" stop-color="#E23FD0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Solid background so the icon reads correctly as an app tile / maskable icon -->
+  <rect width="100" height="100" fill="#0a0a0f"/>
+
+  <!-- N -->
+  <path d="M17 22 L17 78 M17 22 L58 66 M58 30 L58 66"
+        stroke="url(#nGrad)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- J -->
+  <path d="M70 20 L70 58 Q70 76 52 76 Q38 76 33 64"
+        stroke="url(#jGrad)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- Down arrow -->
+  <path d="M84 40 L84 62 M74 54 L84 66 L94 54"
+        stroke="url(#arrowGrad)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
