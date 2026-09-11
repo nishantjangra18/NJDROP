@@ -320,9 +320,36 @@ def download_video(payload: DownloadRequest, background_tasks: BackgroundTasks):
 
 @app.get("/api/health")
 def health_check():
+    cookies_info = {"configured": False}
+
+    if COOKIES_FILE.exists():
+        try:
+            lines = COOKIES_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+            cookie_lines = [
+                ln for ln in lines if ln.strip() and not ln.strip().startswith("#")
+            ]
+            youtube_cookie_names = sorted({
+                parts[5]
+                for ln in cookie_lines
+                if len(parts := ln.split("\t")) >= 7 and "youtube.com" in parts[0]
+            })
+            cookies_info = {
+                "configured": True,
+                "total_lines": len(lines),
+                "cookie_entries": len(cookie_lines),
+                "youtube_cookie_names": youtube_cookie_names,
+                # These three being present together is what actually proves
+                # a logged-in session, not just consent/analytics cookies.
+                "looks_logged_in": {"SID", "SSID", "HSID"}.issubset(set(youtube_cookie_names))
+                or "__Secure-3PSID" in youtube_cookie_names
+                or "LOGIN_INFO" in youtube_cookie_names,
+            }
+        except OSError as exc:
+            cookies_info = {"configured": True, "read_error": str(exc)}
+
     return {
         "status": "ok",
-        "cookies_configured": COOKIES_FILE.exists(),
+        "cookies": cookies_info,
     }
 
 
