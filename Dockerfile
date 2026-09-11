@@ -13,8 +13,13 @@ WORKDIR /app
 
 # Install Python dependencies first for better layer caching.
 COPY backend/requirements.txt ./backend/requirements.txt
-RUN pip install --no-cache-dir -r backend/requirements.txt \
-    && pip install --no-cache-dir -U yt-dlp
+RUN pip install --no-cache-dir -r backend/requirements.txt
+
+# yt-dlp ships frequent fixes for YouTube's extraction changes; always pull
+# the latest at build time in its own layer (rather than relying on the
+# requirements.txt pin alone) so a stale cached layer never silently keeps
+# an old, broken version around across deploys.
+RUN pip install --no-cache-dir -U yt-dlp && yt-dlp --version
 
 # Copy the rest of the project (frontend files + backend source).
 COPY . .
