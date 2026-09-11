@@ -152,7 +152,11 @@ YOUTUBE_CLIENT_ATTEMPTS = [
 def _build_ydl_opts(output_template: str, player_client: list | None) -> dict:
     opts = {
         "outtmpl": output_template,
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        # Prefer mp4 (broadest player compatibility), but fall back to
+        # whatever best video+audio combo is actually available (webm/AV1
+        # etc.) rather than failing outright — some clients (ios/android)
+        # don't expose mp4-native adaptive streams for every video.
+        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
         "merge_output_format": "mp4",
         "noplaylist": True,
         "quiet": True,
