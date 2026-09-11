@@ -56,15 +56,32 @@ MAX_DURATION_SECONDS = 60 * 60  # 1 hour safety cap
 # reliable fix. Set COOKIES_FILE_PATH as an env var pointing at an uploaded
 # secret file (e.g. on Render: Settings -> Secret Files), or drop a
 # cookies.txt next to this script for local testing.
-COOKIES_FILE = Path(os.environ.get("COOKIES_FILE_PATH", str(BASE_DIR / "cookies.txt")))
+_COOKIES_SOURCE = Path(os.environ.get("COOKIES_FILE_PATH", str(BASE_DIR / "cookies.txt")))
 
-if COOKIES_FILE.exists():
-    logger.info("Cookies file found at %s — will be used for YouTube requests.", COOKIES_FILE)
+# yt-dlp writes updated cookies back to this file when it's done (cookie
+# jar autosave). Platforms like Render mount secret files read-only, which
+# makes that write crash the whole request. So if the configured cookies
+# file isn't writable, copy it once into a writable spot and use that copy
+# instead — yt-dlp can then freely update it without touching the original.
+COOKIES_FILE = _COOKIES_SOURCE
+if _COOKIES_SOURCE.exists():
+    if not os.access(_COOKIES_SOURCE, os.W_OK):
+        writable_copy = DOWNLOADS_DIR.parent / "cookies.runtime.txt"
+        try:
+            writable_copy.write_bytes(_COOKIES_SOURCE.read_bytes())
+            COOKIES_FILE = writable_copy
+            logger.info(
+                "Cookies file at %s is read-only; copied to writable %s for yt-dlp's use.",
+                _COOKIES_SOURCE, writable_copy,
+            )
+        except OSError:
+            logger.exception("Failed to copy read-only cookies file to a writable location.")
+    logger.info("Cookies file ready at %s — will be used for YouTube requests.", COOKIES_FILE)
 else:
     logger.warning(
         "No cookies file found at %s (set COOKIES_FILE_PATH or place backend/cookies.txt). "
         "YouTube requests from this server's IP may be bot-checked and fail without it.",
-        COOKIES_FILE,
+        _COOKIES_SOURCE,
     )
 
 
