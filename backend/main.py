@@ -367,6 +367,28 @@ def health_check():
     }
 
 
+@app.get("/api/debug-plugins")
+def debug_plugins():
+    """Diagnostic-only: confirms whether the bgutil PO token plugin package
+    is importable and which extractor/PO-token classes yt-dlp registered."""
+    result = {}
+    try:
+        import bgutil_ytdlp_pot_provider  # noqa: F401
+        result["bgutil_package_importable"] = True
+    except ImportError as exc:
+        result["bgutil_package_importable"] = False
+        result["import_error"] = str(exc)
+
+    try:
+        from yt_dlp.extractor.youtube.pot._provider import IEContentProvider
+        registered = [cls.__name__ for cls in IEContentProvider.__subclasses__()]
+        result["registered_pot_provider_classes"] = registered
+    except Exception as exc:  # noqa: BLE001
+        result["pot_provider_class_check_error"] = str(exc)
+
+    return result
+
+
 @app.get("/api/debug-extract")
 def debug_extract(url: str):
     """
@@ -375,20 +397,31 @@ def debug_extract(url: str):
     in the JSON response. Exists purely to debug extraction failures without
     needing to read server logs. Not linked from the UI.
     """
+    import io
+    import contextlib
+
     results = {}
     for player_client in [["tv"], ["ios"], ["android"], ["web_safari"], ["web"], None]:
         label = player_client[0] if player_client else "default"
+        captured = io.StringIO()
         opts = {
-            "quiet": True,
-            "no_warnings": True,
+            "verbose": True,
             "skip_download": True,
             "socket_timeout": 20,
+            "logger": logging.getLogger(f"ytdlp-debug-{label}"),
         }
+        # Route yt-dlp's verbose/debug lines into our capture buffer.
+        handler = logging.StreamHandler(captured)
+        opts["logger"].addHandler(handler)
+        opts["logger"].setLevel(logging.DEBUG)
+        opts["logger"].propagate = False
+
         if player_client:
             opts["extractor_args"] = {"youtube": {"player_client": player_client}}
         if COOKIES_FILE.exists():
             opts["cookiefile"] = str(COOKIES_FILE)
 
+        pot_lines = []
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -401,6 +434,11 @@ def debug_extract(url: str):
                 }
         except Exception as exc:  # noqa: BLE001 - diagnostic endpoint, want the raw text
             results[label] = {"ok": False, "error": str(exc)}
+        finally:
+            opts["logger"].removeHandler(handler)
+            captured_text = captured.getvalue()
+            pot_lines = [ln for ln in captured_text.splitlines() if "pot" in ln.lower()]
+            results[label]["pot_debug_lines"] = pot_lines[:15]
 
     return {"yt_dlp_version": yt_dlp.version.__version__, "results": results}
 
