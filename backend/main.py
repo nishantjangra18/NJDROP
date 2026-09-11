@@ -351,10 +351,19 @@ def health_check():
         except OSError as exc:
             cookies_info = {"configured": True, "read_error": str(exc)}
 
+    pot_provider_status = "unreachable"
+    try:
+        import urllib.request
+        with urllib.request.urlopen("http://127.0.0.1:4416/ping", timeout=2) as resp:
+            pot_provider_status = "ok" if resp.status == 200 else f"http_{resp.status}"
+    except Exception as exc:  # noqa: BLE001 - just a diagnostic probe
+        pot_provider_status = f"error: {exc}"
+
     return {
         "status": "ok",
         "cookies": cookies_info,
         "yt_dlp_version": yt_dlp.version.__version__,
+        "pot_provider": pot_provider_status,
     }
 
 
