@@ -354,7 +354,46 @@ def health_check():
     return {
         "status": "ok",
         "cookies": cookies_info,
+        "yt_dlp_version": yt_dlp.version.__version__,
     }
+
+
+@app.get("/api/debug-extract")
+def debug_extract(url: str):
+    """
+    Diagnostic-only endpoint: runs yt-dlp's extract_info (no download) for
+    each player client and returns the raw result/error for each, directly
+    in the JSON response. Exists purely to debug extraction failures without
+    needing to read server logs. Not linked from the UI.
+    """
+    results = {}
+    for player_client in [["tv"], ["ios"], ["android"], ["web_safari"], ["web"], None]:
+        label = player_client[0] if player_client else "default"
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "socket_timeout": 20,
+        }
+        if player_client:
+            opts["extractor_args"] = {"youtube": {"player_client": player_client}}
+        if COOKIES_FILE.exists():
+            opts["cookiefile"] = str(COOKIES_FILE)
+
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                formats = info.get("formats") or []
+                results[label] = {
+                    "ok": True,
+                    "title": info.get("title"),
+                    "format_count": len(formats),
+                    "sample_format_ids": [f.get("format_id") for f in formats[:5]],
+                }
+        except Exception as exc:  # noqa: BLE001 - diagnostic endpoint, want the raw text
+            results[label] = {"ok": False, "error": str(exc)}
+
+    return {"yt_dlp_version": yt_dlp.version.__version__, "results": results}
 
 
 # --------------------------------------------------------------------------
