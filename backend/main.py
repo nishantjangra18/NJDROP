@@ -58,6 +58,15 @@ MAX_DURATION_SECONDS = 60 * 60  # 1 hour safety cap
 # cookies.txt next to this script for local testing.
 COOKIES_FILE = Path(os.environ.get("COOKIES_FILE_PATH", str(BASE_DIR / "cookies.txt")))
 
+if COOKIES_FILE.exists():
+    logger.info("Cookies file found at %s — will be used for YouTube requests.", COOKIES_FILE)
+else:
+    logger.warning(
+        "No cookies file found at %s (set COOKIES_FILE_PATH or place backend/cookies.txt). "
+        "YouTube requests from this server's IP may be bot-checked and fail without it.",
+        COOKIES_FILE,
+    )
+
 
 # --------------------------------------------------------------------------
 # Request / response models
@@ -294,7 +303,10 @@ def download_video(payload: DownloadRequest, background_tasks: BackgroundTasks):
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "cookies_configured": COOKIES_FILE.exists(),
+    }
 
 
 # --------------------------------------------------------------------------
