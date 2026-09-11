@@ -110,14 +110,21 @@ def safe_filename(name: str, fallback: str) -> str:
 # Core download logic
 # --------------------------------------------------------------------------
 
-def run_download(platform: str, url: str, job_id: str) -> Path:
-    """
-    Downloads the video with yt-dlp, merging audio+video via FFmpeg when the
-    best available streams are separate. Returns the path to the final file.
-    """
-    output_template = str(DOWNLOADS_DIR / f"{job_id}.%(ext)s")
+# YouTube player clients to try in order. Each uses a different auth path;
+# when one gets bot-checked, the next often succeeds without cookies. This
+# is retried as fully separate yt-dlp runs (not passed together) since a
+# single combined attempt can fail outright instead of cleanly falling back.
+YOUTUBE_CLIENT_ATTEMPTS = [
+    ["tv"],
+    ["ios"],
+    ["android"],
+    ["web_safari"],
+    ["web"],
+]
 
-    ydl_opts = {
+
+def _build_ydl_opts(output_template: str, player_client: list | None) -> dict:
+    opts = {
         "outtmpl": output_template,
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "merge_output_format": "mp4",
@@ -130,77 +137,130 @@ def run_download(platform: str, url: str, job_id: str) -> Path:
         # FFmpeg must be on PATH for merging separate audio/video streams.
     }
 
-    if platform == "youtube":
-        # Cloud/datacenter IPs are frequently bot-checked by YouTube's web
-        # client. The android/ios player clients use a different auth path
-        # that often succeeds without cookies. See COOKIES_FILE fallback
-        # below for cases even this doesn't clear.
-        ydl_opts["extractor_args"] = {
-            "youtube": {"player_client": ["android", "ios", "web"]}
-        }
+    if player_client:
+        opts["extractor_args"] = {"youtube": {"player_client": player_client}}
 
     if COOKIES_FILE and COOKIES_FILE.exists():
-        ydl_opts["cookiefile"] = str(COOKIES_FILE)
+        opts["cookiefile"] = str(COOKIES_FILE)
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+    return opts
 
-            if info is None:
-                raise HTTPException(status_code=422, detail="Could not read video information from that link.")
 
-            duration = info.get("duration") or 0
-            if duration and duration > MAX_DURATION_SECONDS:
+def _resolve_final_path(ydl: "yt_dlp.YoutubeDL", info: dict, job_id: str) -> Path:
+    final_path = Path(ydl.prepare_filename(info))
+    if not final_path.exists():
+        # merge_output_format may have changed the extension to mp4
+        candidate = final_path.with_suffix(".mp4")
+        if candidate.exists():
+            final_path = candidate
+
+    if not final_path.exists():
+        # Fall back to scanning the downloads dir for this job_id
+        matches = list(DOWNLOADS_DIR.glob(f"{job_id}.*"))
+        if matches:
+            final_path = matches[0]
+
+    return final_path
+
+
+def _is_bot_check_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "sign in to confirm" in message or "not a bot" in message
+
+
+def run_download(platform: str, url: str, job_id: str) -> Path:
+    """
+    Downloads the video with yt-dlp, merging audio+video via FFmpeg when the
+    best available streams are separate. Returns the path to the final file.
+
+    For YouTube, retries across several player clients (ios/android/
+    tv_embedded/web) since YouTube's bot-check applies per-client — one
+    getting blocked doesn't mean the others will be.
+    """
+    output_template = str(DOWNLOADS_DIR / f"{job_id}.%(ext)s")
+
+    client_attempts = YOUTUBE_CLIENT_ATTEMPTS if platform == "youtube" else [None]
+
+    last_exc: Exception | None = None
+
+    for attempt_index, player_client in enumerate(client_attempts):
+        ydl_opts = _build_ydl_opts(output_template, player_client)
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+                if info is None:
+                    raise HTTPException(status_code=422, detail="Could not read video information from that link.")
+
+                duration = info.get("duration") or 0
+                if duration and duration > MAX_DURATION_SECONDS:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="This video is too long to process (limit: 60 minutes).",
+                    )
+
+                if info.get("is_live"):
+                    raise HTTPException(status_code=422, detail="Live streams can't be downloaded.")
+
+                ydl.download([url])
+
+                final_path = _resolve_final_path(ydl, info, job_id)
+                if not final_path.exists():
+                    raise HTTPException(status_code=500, detail="Processing finished but the output file was not found.")
+
+                return final_path
+
+        except yt_dlp.utils.DownloadError as exc:
+            last_exc = exc
+            message = str(exc).lower()
+            is_last_attempt = attempt_index == len(client_attempts) - 1
+
+            # These outcomes are definitive regardless of which client was
+            # used — retrying with a different player client won't help, so
+            # stop immediately instead of burning through the rest. Careful
+            # to match on the *video* being gone, not a per-client "format
+            # not available" error (that's exactly what should be retried).
+            if "unsupported url" in message or "unable to extract" in message:
+                raise HTTPException(status_code=400, detail="This link isn't supported or the URL is invalid.")
+            if "private video" in message or "this is a private" in message:
+                raise HTTPException(status_code=403, detail="This video is private and can't be accessed.")
+            if "video unavailable" in message or "video is unavailable" in message or "has been removed" in message:
+                raise HTTPException(status_code=404, detail="This video is unavailable or has been removed.")
+
+            # Everything else (bot-checks, "no video formats found", other
+            # per-client extraction glitches) is worth retrying on the next
+            # player client before giving up.
+            if not is_last_attempt:
+                logger.warning(
+                    "Job %s: client %s failed (%s), trying next client",
+                    job_id, player_client, exc,
+                )
+                continue
+
+            if _is_bot_check_error(exc):
+                logger.error("yt-dlp bot-check triggered on all clients: %s", exc)
                 raise HTTPException(
-                    status_code=422,
-                    detail="This video is too long to process (limit: 60 minutes).",
+                    status_code=503,
+                    detail="YouTube is temporarily blocking this server's requests. Please try again shortly.",
                 )
 
-            if info.get("is_live"):
-                raise HTTPException(status_code=422, detail="Live streams can't be downloaded.")
+            logger.error("yt-dlp download error: %s", exc)
+            raise HTTPException(status_code=422, detail="This video could not be processed. It may be restricted or unavailable.")
 
-            ydl.download([url])
+        except HTTPException:
+            raise
 
-            # Resolve the final filename yt-dlp actually wrote (post merge).
-            final_path = Path(ydl.prepare_filename(info))
-            if not final_path.exists():
-                # merge_output_format may have changed the extension to mp4
-                candidate = final_path.with_suffix(".mp4")
-                if candidate.exists():
-                    final_path = candidate
+        except Exception as exc:  # noqa: BLE001 - surface as a clean 500 to the client
+            logger.exception("Unexpected error during download")
+            raise HTTPException(status_code=500, detail="An unexpected server error occurred while processing your video.")
 
-            if not final_path.exists():
-                # Fall back to scanning the downloads dir for this job_id
-                matches = list(DOWNLOADS_DIR.glob(f"{job_id}.*"))
-                if not matches:
-                    raise HTTPException(status_code=500, detail="Processing finished but the output file was not found.")
-                final_path = matches[0]
-
-            return final_path
-
-    except yt_dlp.utils.DownloadError as exc:
-        message = str(exc).lower()
-        if "sign in to confirm" in message or "not a bot" in message:
-            logger.error("yt-dlp bot-check triggered: %s", exc)
-            raise HTTPException(
-                status_code=503,
-                detail="YouTube is temporarily blocking this server's requests. Please try again shortly.",
-            )
-        if "unsupported url" in message or "unable to extract" in message:
-            raise HTTPException(status_code=400, detail="This link isn't supported or the URL is invalid.")
-        if "private" in message:
-            raise HTTPException(status_code=403, detail="This video is private and can't be accessed.")
-        if "unavailable" in message or "not available" in message:
-            raise HTTPException(status_code=404, detail="This video is unavailable or has been removed.")
-        logger.error("yt-dlp download error: %s", exc)
-        raise HTTPException(status_code=422, detail="This video could not be processed. It may be restricted or unavailable.")
-
-    except HTTPException:
-        raise
-
-    except Exception as exc:  # noqa: BLE001 - surface as a clean 500 to the client
-        logger.exception("Unexpected error during download")
-        raise HTTPException(status_code=500, detail="An unexpected server error occurred while processing your video.")
+    # Exhausted all client attempts without success or a raised HTTPException
+    logger.error("All player client attempts failed: %s", last_exc)
+    raise HTTPException(
+        status_code=503,
+        detail="YouTube is temporarily blocking this server's requests. Please try again shortly.",
+    )
 
 
 # --------------------------------------------------------------------------
